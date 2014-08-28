@@ -142,16 +142,9 @@ namespace NishBot
             Console.Write("> ");
         }
 
-
-        static void c_PrivateMessage(Client sender, Iris.Irc.ServerMessages.PrivateMessage privateMessage)
+        static void update_seen(Client sender, string user, string rcpt, string message)
         {
             ircSettings i = iSettings[sender];
-            string user = privateMessage.User.Split('!')[0];
-            string rcpt = privateMessage.Recipient;
-            if (privateMessage.Recipient == sender.Config.Nickname)
-            {
-                rcpt = user;
-            }
 
             string db = i.server.Split('.')[1] + ".db";
             string tbl = @"CREATE TABLE IF NOT EXISTS seen (
@@ -162,14 +155,14 @@ namespace NishBot
             if (File.Exists(db))
             {
                 SQLiteConnection sql = new SQLiteConnection("data source=" + db);
-                
+
                 sql.Open();
-                using(SQLiteCommand com = new SQLiteCommand(sql))
+                using (SQLiteCommand com = new SQLiteCommand(sql))
                 {
-                    string message = privateMessage.Message;
+                    
                     if (message.Contains('\''))
                     {
-                        message= message.Replace("\'", "");
+                        message = message.Replace("\'", "&apos;");
                     }
                     com.CommandText = tbl;
                     com.ExecuteNonQuery();
@@ -186,7 +179,7 @@ namespace NishBot
             {
                 SQLiteConnection.CreateFile(db);
                 SQLiteConnection sql = new SQLiteConnection("data source=" + db);
-                
+
                 sql.Open();
                 using (SQLiteCommand com = new SQLiteCommand(sql))
                 {
@@ -196,7 +189,70 @@ namespace NishBot
                 sql.Close();
                 sql.Dispose();
             }
+        }
 
+        static void find_seen(Client sender, string user, string rcpt, string msg)
+        {
+            ircSettings i = iSettings[sender];
+
+            string db = i.server.Split('.')[1] + ".db";
+
+            if (File.Exists(db))
+            {
+                if (msg.Contains(' '))
+                {
+                    msg = msg.Split(' ')[0];
+                }
+                msg = msg.Replace("\'", "");
+                SQLiteConnection sql = new SQLiteConnection("data source=" + db);
+                sql.Open();
+                using (SQLiteCommand com = new SQLiteCommand(sql))
+                {
+                    com.CommandText = "SELECT * FROM seen WHERE UPPER(sUSER)='" + msg.ToUpper() + "'";
+                    using (SQLiteDataReader res = com.ExecuteReader())
+                    {
+                        if (res.HasRows)
+                        {
+                            while (res.Read())
+                            {
+                                string sUser = res["sUSER"].ToString();
+                                string sChannel = res["sCHANNEL"].ToString();
+                                string sMsg = res["sMSG"].ToString();
+                                string sDate = res["sDATE"].ToString();
+                                if (sChannel.StartsWith("#") == false)
+                                {
+                                    sChannel = "PRIVATE";
+                                }
+                                sMsg = sMsg.Replace("&apos;", "\'");
+                                sender.Send(rcpt, "Last seen " + sUser + " in " + sChannel + " at " + sDate + " saying: '" + sMsg + "'");
+                            }
+                        }
+                        else
+                        {
+                            sender.Send(rcpt, msg + " has not been seen :(");
+                        }
+                    }
+                }
+                sql.Close();
+                sql.Dispose();
+            }
+            else
+            {
+                sender.Send(rcpt, msg + " has not been seen :(");
+            }
+        }
+
+        static void c_PrivateMessage(Client sender, Iris.Irc.ServerMessages.PrivateMessage privateMessage)
+        {
+            ircSettings i = iSettings[sender];
+            string user = privateMessage.User.Split('!')[0];
+            string rcpt = privateMessage.Recipient;
+            if (privateMessage.Recipient == sender.Config.Nickname)
+            {
+                rcpt = user;
+            }
+
+            update_seen(sender, user, rcpt, privateMessage.Message);
 
             if (privateMessage.Message.StartsWith("."))
             {
@@ -209,97 +265,61 @@ namespace NishBot
                     cmd = privateMessage.Message.Substring(0, privateMessage.Message.IndexOf(' '));
                     msg = privateMessage.Message.Substring(cmd.Length + 1, privateMessage.Message.Length - cmd.Length - 1);
                 }
-
-                switch (cmd.ToUpper())
+                if (check_auth(sender, user))
                 {
-                    case ".JOIN":
-                        if (msg.Contains(' '))
-                        {
-                            msg = msg.Split(' ')[0];
-                        }
-                        sender.Join(msg);
-                        break;
-                    case ".PART":
-                        if (msg.Contains(' '))
-                        {
-                            sender.Leave(msg.Split(' ')[0]);
-                        }
-                        else
-                        {
-                            if (rcpt.StartsWith("#"))
-                            {
-                                sender.Leave(rcpt);
-                            }
-                        }
-                        break;
-                    case ".WAVE":
-                        sender.Send(rcpt, "o/");
-                        break;
-
-                    case ".SEEN":
-                        if (check_auth(sender, user))
-                        {
-                            if (File.Exists(db))
-                            {
-                                if (msg.Contains(' '))
-                                {
-                                    msg = msg.Split(' ')[0];
-                                }
-                                SQLiteConnection sql = new SQLiteConnection("data source=" + db);
-                                sql.Open();
-                                using (SQLiteCommand com = new SQLiteCommand(sql))
-                                {
-                                    com.CommandText = "SELECT * FROM seen WHERE sUSER='" + msg + "'";
-                                    using(SQLiteDataReader res = com.ExecuteReader())
-                                    {
-                                        if (res.HasRows)
-                                        {
-                                            while (res.Read())
-                                            {
-                                                string sUser = res["sUSER"].ToString();
-                                                string sChannel = res["sCHANNEL"].ToString();
-                                                string sMsg = res["sMSG"].ToString();
-                                                string sDate = res["sDATE"].ToString();
-                                                if (sChannel.StartsWith("#") == false)
-                                                {
-                                                    sChannel = "PRIVATE";
-                                                }
-                                                sender.Send(rcpt, "Last seen " + sUser + " in " + sChannel + " at " + sDate + " saying: '" + sMsg + "'");
-                                            }
-                                        }
-                                        else
-                                        {
-                                            sender.Send(rcpt, msg + " has not been seen :(");
-                                        }
-                                    }
-                                }
-                                sql.Close();
-                                sql.Dispose();
-                            }
-                            else
-                            {
-                                sender.Send(rcpt, msg + " has not been seen :(");
-                            }
-
-                        }
-                        break;
-                    case ".INFO":
-                        sender.Send(rcpt, "An IRC BOT Written by Nishtown, Based off IRIS by Banane9");
-                        break;
-
-                    case ".ADDAUTH":
-                        if (check_auth(sender, user))
-                        {
-                            
+                    switch (cmd.ToUpper())
+                    {
+                        case ".JOIN":
                             if (msg.Contains(' '))
                             {
                                 msg = msg.Split(' ')[0];
                             }
-                            i.auth.Add(msg);
-                            iSettings[sender] = i;
-                        }
-                        break;
+                            sender.Join(msg);
+                            break;
+                        case ".PART":
+                            if (msg.Contains(' '))
+                            {
+                                sender.Leave(msg.Split(' ')[0]);
+                            }
+                            else
+                            {
+                                if (rcpt.StartsWith("#"))
+                                {
+                                    sender.Leave(rcpt);
+                                }
+                            }
+                            break;
+                        case ".GOOGLE":
+                            sender.Send(rcpt, "https://www.google.com.au/search?q=" + msg.Replace(' ', '+'));
+                            break;
+                        case ".WAVE":
+                            sender.Send(rcpt, "o/");
+                            break;
 
+                        case ".SEEN":
+                            if (check_auth(sender, user))
+                            {
+                                find_seen(sender, user, rcpt, msg);
+                            }
+                            break;
+                        case ".INFO":
+                            sender.Send(rcpt, "An IRC BOT Written by Nishtown, Based off IRIS by Banane9");
+                            break;
+
+                        case ".ADDAUTH":
+                            if (check_auth(sender, user))
+                            {
+
+                                if (msg.Contains(' '))
+                                {
+                                    msg = msg.Split(' ')[0];
+                                }
+                                i.auth.Add(msg);
+                                iSettings[sender] = i;
+                            }
+                            break;
+
+                    }
                 }
             }
         }
